@@ -12,7 +12,7 @@ namespace SearchDuplicates
 {
     internal class Dupe : IDisposable
     {
-        private static int _unaccessibleFiles;
+        private int _unaccessibleFiles;
         private readonly Hashtable _dupeDb = new Hashtable();
         private readonly Hashtable _hashDb = new Hashtable();
         private int _count;
@@ -223,7 +223,9 @@ namespace SearchDuplicates
                     {
                         wr.WriteLine(logEntry);
 
+#pragma warning disable 168
                         foreach (char c in logEntry)
+#pragma warning restore 168
                             wr.Write("-");
                         wr.WriteLine(Environment.NewLine);
                     }
