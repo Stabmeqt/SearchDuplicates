@@ -1,160 +1,254 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Collections;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
-using System.Collections;
-using System.IO;
-using System.Security.Cryptography;
-using System.Globalization;
+using System.Threading;
+using System.Windows.Forms;
 
 namespace SearchDuplicates
 {
-    class Dupe : IDisposable
+    internal class Dupe : IDisposable
     {
-        Hashtable hashDB = new Hashtable();
-        Hashtable dupeDB = new Hashtable();
-        private TimeSpan ts;
-        private double watch;
-        private long fileSize;
-        public double TimeElapsed
+        private static int _unaccessibleFiles;
+        private readonly Hashtable _dupeDb = new Hashtable();
+        private readonly Hashtable _hashDb = new Hashtable();
+        private int _count;
+        private long _fileSize;
+        private bool _isDirectoryErrorSuppressionEnabled;
+        private bool _isFileErrorSuppressionEnabled;
+
+        private Stopwatch _stopwatch;
+        public int DupesFound { get; private set; }
+        public double TimeElapsed { get; private set; }
+
+        #region IDisposable Members
+
+        public void Dispose()
         {
-            get { return watch; }
+            GC.Collect();
         }
-        private System.Diagnostics.Stopwatch stopwatch;
-        private void ComputeMD5Checksum(string path, System.Threading.CancellationToken ct)
+
+        #endregion
+
+        private void ComputeMd5Checksum(string path, CancellationToken ct)
         {
-            DirectoryInfo d = new DirectoryInfo(path);
+            if (path == null) throw new ArgumentNullException("path");
+            var d = new DirectoryInfo(path);
             foreach (FileInfo file in d.GetFiles())
             {
                 ct.ThrowIfCancellationRequested();
                 using (FileStream fs = File.OpenRead(file.FullName))
                 {
-                    MD5 md5 = new MD5CryptoServiceProvider();
-                    byte[] fileData = new byte[fs.Length];
-                    fs.Read(fileData, 0, (int)fs.Length);
-                    byte[] checkSum = md5.ComputeHash(fileData);
-                    string result = BitConverter.ToString(checkSum).Replace("-", String.Empty);
-                    if (!hashDB.Contains(result))
-                        hashDB.Add(result, file.FullName);
-                    else
-                        if (!dupeDB.Contains(file.FullName))
-                        {
-                            dupeDB.Add(file.FullName, result);
-                            fileSize += file.Length;
-                        }
+                    string result = Util.GetHash(fs);
+                    if (!_hashDb.Contains(result))
+                        _hashDb.Add(result, file.FullName);
+                    else if (!_dupeDb.Contains(file.FullName))
+                    {
+                        _dupeDb.Add(file.FullName, result);
+                        _fileSize += file.Length;
+                    }
                     fs.Close();
                 }
             }
-            ComputeMD5ChecksumFromDir(path, ct);
+            ComputeMd5ChecksumFromDir(path, ct);
         }
-        private void ComputeMD5ChecksumFromDir(string path, System.Threading.CancellationToken ct)
+
+
+        private void ComputeMd5ChecksumFromDir(string path, CancellationToken ct)
         {
             foreach (string dir in Directory.GetDirectories(path))
             {
-                foreach (string file in Directory.GetFiles(dir))
+                string tmpFileName = "";
+                try
                 {
-                    ct.ThrowIfCancellationRequested();
-                    using (FileStream fs = File.OpenRead(file))
+                    foreach (string file in Directory.GetFiles(dir))
                     {
-                        MD5 md5 = new MD5CryptoServiceProvider();
-                        byte[] fileData = new byte[fs.Length];
-                        fs.Read(fileData, 0, (int)fs.Length);
-                        byte[] checkSum = md5.ComputeHash(fileData);
-                        string result = BitConverter.ToString(checkSum).Replace("-", String.Empty);
-                        if (!hashDB.Contains(result))
-                            hashDB.Add(result, file);
-                        else
-
-                            if (!dupeDB.Contains(file))
+                        ct.ThrowIfCancellationRequested();
+                        tmpFileName = file;
+                        using (FileStream fs = File.OpenRead(file))
+                        {
+                            string result = Util.GetHash(fs);
+                            if (!_hashDb.Contains(result))
+                                _hashDb.Add(result, file);
+                            else if (!_dupeDb.Contains(file))
                             {
-                                dupeDB.Add(file, result);
-                                FileInfo f = new FileInfo(file);
-                                fileSize += f.Length;
+                                _dupeDb.Add(file, result);
+                                var f = new FileInfo(file);
+                                _fileSize += f.Length;
                             }
-                        fs.Close();
+                            fs.Close();
+                        }
+                    }
+                    ComputeMd5ChecksumFromDir(dir, ct);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    DialogResult dialogResult;
+                    if (!_isDirectoryErrorSuppressionEnabled)
+                    {
+                        dialogResult = MessageBox.Show("У запускающего пользователя не хватает "
+                                                       + "прав для обращения к объекту " + dir +
+                                                       ". Продолжить поиск с повышенными привилегиями?\r\n(При нажатии на 'Да' это окно больше не появится.)",
+                                                       "Нехватка прав",
+                                                       MessageBoxButtons.YesNoCancel);
+                    }
+                    else
+                    {
+                        dialogResult = new DialogResult();
+                    }
+                    if (dialogResult == DialogResult.Yes)
+                    {
+                        _isDirectoryErrorSuppressionEnabled = true;
+                        Util.SetAccessRights(dir);
+                    }
+                    else if (dialogResult == DialogResult.No)
+                    {
+                        Util.SetAccessRights(dir);
+                    }
+                    else if (dialogResult == DialogResult.Cancel)
+                    {
+                        break;
                     }
                 }
-                ComputeMD5ChecksumFromDir(dir, ct);
+                catch (IOException)
+                {
+                    ++_unaccessibleFiles;
+                    DialogResult dialogResult;
+                    if (!_isFileErrorSuppressionEnabled)
+                    {
+                        dialogResult =
+                            MessageBox.Show(
+                                "Ошибка доступа к объекту " + tmpFileName +
+                                ". Продолжить поиск?\r\n(При нажатии на 'Да' это окно больше не появится.)",
+                                "Нет доступа",
+                                MessageBoxButtons.YesNoCancel);
+                    }
+                    else
+                    {
+                        dialogResult = new DialogResult();
+                    }
+
+                    if (dialogResult == DialogResult.Yes)
+                    {
+                        _isFileErrorSuppressionEnabled = true;
+                    }
+                    else if (dialogResult == DialogResult.No)
+                    {
+                    }
+                    else if (dialogResult == DialogResult.Cancel)
+                    {
+                        break;
+                    }
+                }
             }
         }
-        public StringBuilder Search(string path, System.Threading.CancellationToken ct)
+
+        public StringBuilder Search(string path, CancellationToken ct)
         {
-            stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            ComputeMD5Checksum(path, ct);
+            _stopwatch = Stopwatch.StartNew();
+            ComputeMd5Checksum(path, ct);
+            DupesFound = _dupeDb.Keys.Count;
             StringBuilder builder = PrintResult();
-            ts = stopwatch.Elapsed;
-            watch = stopwatch.Elapsed.TotalSeconds;
-            stopwatch.Stop();
+            TimeElapsed = _stopwatch.Elapsed.TotalSeconds;
+            _stopwatch.Stop();
             return builder;
         }
-        private DictionaryEntry SearchEntry(
-            Hashtable table, object searchKey = null, object searchValue = null)
+
+        private static DictionaryEntry SearchEntry(
+            IEnumerable table, object searchKey = null, object searchValue = null)
         {
-            DictionaryEntry entry = new DictionaryEntry();
-            foreach (DictionaryEntry d in table)
+            var entry = new DictionaryEntry();
+            foreach (DictionaryEntry d in from DictionaryEntry d in table
+                                          where (d.Key.ToString() == (string) searchKey) ||
+                                                (d.Value.ToString() == (string) searchValue)
+                                          select d)
             {
-                if ((d.Key.ToString() == (string)searchKey) ||
-                    (d.Value.ToString() == (string)searchValue))
-                    entry = d;
+                entry = d;
             }
             return entry;
         }
 
         private StringBuilder PrintResult()
         {
-            StringBuilder builder = new StringBuilder("");
-            double size = ConvertBytesToMegabytes(fileSize);
-            builder.AppendFormat("Уникальных файлов: \r\n{0}\r\n", hashDB.Keys.Count);
-            builder.AppendFormat("Дубликатов: \r\n{0}\r\n", dupeDB.Keys.Count);
+            var builder = new StringBuilder("");
+            double size = ConvertBytesToMegabytes(_fileSize);
+            builder.AppendFormat("Уникальных файлов: {0}\r\n", _hashDb.Keys.Count);
+            builder.AppendFormat("\r\nДубликатов: {0}\r\n", _dupeDb.Keys.Count);
             if (size < 1)
-                builder.AppendFormat("Общий размер дубликатов: \r\nменьше 1МБ\r\n");
+                builder.AppendFormat("\r\nОбщий размер дубликатов: меньше 1МБ\r\n");
             else
-                builder.AppendFormat("Общий размер дубликатов: \r\n{0}МБ\r\n",
-                    size.ToString("0.00"));
+                builder.AppendFormat("\r\nОбщий размер дубликатов: {0}МБ\r\n",
+                                     size.ToString("0.00"));
+            if (_unaccessibleFiles > 0)
+                builder.AppendFormat("\r\nПоиск не затронул: {0} файлов.\r\nНа момент поиска они были недоступны.\r\n",
+                                     _unaccessibleFiles);
             return builder;
         }
-        static double ConvertBytesToMegabytes(long bytes)
-        {
-            return (bytes / 1024f) / 1024f;
-        }
-        private void Test()
-        {
 
+        private static double ConvertBytesToMegabytes(long bytes)
+        {
+            return (bytes/1024f)/1024f;
         }
+
+        public int DeleteEntries()
+        {
+            if (_dupeDb != null)
+            {
+                foreach (DictionaryEntry entry in _dupeDb)
+                {
+                    var file = new FileInfo(entry.Key.ToString());
+                    if (!file.Exists) continue;
+                    try
+                    {
+                        file.Delete();
+                        _count++;
+                    }
+                    catch (Exception)
+                    {
+                        MessageBox.Show(
+                            "Невозможно удалить дубликат. Вероятно в данный момент он используется системой.",
+                            "Ошибка удаления", MessageBoxButtons.OK,
+                            MessageBoxIcon.Stop);
+                    }
+                }
+            }
+            return _count;
+        }
+
         public void SaveLog(string path)
         {
-            string logEntry;
             using (FileStream stream = File.Create(path))
             {
-                StreamWriter wr = new StreamWriter(stream, Encoding.Default);
-                if (dupeDB.Keys.Count > 0)
-                    foreach (DictionaryEntry file in dupeDB)
+                var wr = new StreamWriter(stream, Encoding.Default);
+                if (_dupeDb.Keys.Count > 0)
+                    foreach (string logEntry in from DictionaryEntry file in _dupeDb
+                                                let d = SearchEntry(_hashDb, file.Value)
+                                                select
+                                                    string.Format("Дубликат -> [{0}]\tОригинал -> [{1}]", file.Key,
+                                                                  d.Value))
                     {
-                        DictionaryEntry d = SearchEntry(hashDB, file.Value, null);
-                        logEntry = string.Format("Дубликат -> [{0}]\tОригинал -> [{1}]", file.Key, d.Value);
                         wr.WriteLine(logEntry);
-                        foreach (var c in logEntry)
-                        {
+
+                        foreach (char c in logEntry)
                             wr.Write("-");
-                        }
                         wr.WriteLine(Environment.NewLine);
                     }
                 else
                     wr.WriteLine("Дубликаты не найдены");
                 wr.WriteLine(string.Format
-                    ("Время обработки запроса: {0} секунд(ы)", watch.ToString
-                    ("F", CultureInfo.InvariantCulture)));
+                                 ("Время обработки запроса: {0} секунд(ы)", TimeElapsed.ToString
+                                                                                ("F", CultureInfo.InvariantCulture)));
+                if (_count > 0)
+                {
+                    wr.WriteLine();
+                    wr.WriteLine(string.Format("Удалено {0} дубликатов.", _count));
+                }
                 wr.Close();
                 stream.Close();
             }
         }
-
-        #region Члены IDisposable
-
-        public void Dispose()
-        {
-            GC.Collect();
-        }
-        #endregion
     }
 }
