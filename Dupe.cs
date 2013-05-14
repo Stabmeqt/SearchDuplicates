@@ -24,14 +24,10 @@ namespace SearchDuplicates
         public int DupesFound { get; private set; }
         public double TimeElapsed { get; private set; }
 
-        #region IDisposable Members
-
         public void Dispose()
         {
             GC.Collect();
         }
-
-        #endregion
 
         private void ComputeMd5Checksum(string path, CancellationToken ct)
         {
@@ -174,7 +170,7 @@ namespace SearchDuplicates
         private StringBuilder PrintResult()
         {
             var builder = new StringBuilder("");
-            double size = ConvertBytesToMegabytes(_fileSize);
+            double size = Util.ConvertBytesToMegabytes(_fileSize);
             builder.AppendFormat("Уникальных файлов: {0}\r\n", _hashDb.Keys.Count);
             builder.AppendFormat("\r\nДубликатов: {0}\r\n", _dupeDb.Keys.Count);
             if (size < 1)
@@ -186,11 +182,6 @@ namespace SearchDuplicates
                 builder.AppendFormat("\r\nПоиск не затронул: {0} файлов.\r\nНа момент поиска они были недоступны.\r\n",
                                      _unaccessibleFiles);
             return builder;
-        }
-
-        private static double ConvertBytesToMegabytes(long bytes)
-        {
-            return (bytes/1024f)/1024f;
         }
 
         public int DeleteEntries()
