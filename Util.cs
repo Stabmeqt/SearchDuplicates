@@ -23,22 +23,10 @@ namespace SearchDuplicates
         }
 
         private static void AddFileSecurity(string dirName, string account, FileSystemRights rights, AccessControlType controlType)
-        {
-
-            // Get a FileSecurity object that represents the
-            // current security settings.
-
-            //FileSecurity fSecurity = File.GetAccessControl(fileName);
+        {   
             DirectorySecurity dSecurity = Directory.GetAccessControl(dirName);
-
-            // Add the FileSystemAccessRule to the security settings.
-
-            //fSecurity.AddAccessRule(new FileSystemAccessRule(account,rights, controlType));
-            dSecurity.AddAccessRule(new FileSystemAccessRule(account, rights, controlType));
             
-            // Set the new access settings.
-
-            //File.SetAccessControl(fileName, fSecurity);
+            dSecurity.AddAccessRule(new FileSystemAccessRule(account, rights, controlType));
             Directory.SetAccessControl(dirName, dSecurity);
         }
         public static void SetAccessRights(string dir)
@@ -47,8 +35,6 @@ namespace SearchDuplicates
             if (wi != null)
             {
                 string user = wi.Name;
-
-                // Add the access control entry to the file.
                 AddFileSecurity(dir, @user,
                                      FileSystemRights.FullControl, AccessControlType.Allow);
             }
