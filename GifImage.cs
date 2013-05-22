@@ -68,9 +68,9 @@ namespace SearchDuplicates
             int count = _decoder.Frames.Count;
             _animation = new Int32Animation(0, count - 1,
                                             new Duration(new TimeSpan(0, 0, 0, count/10,
-// ReSharper disable PossibleLossOfFraction
+
                                                                       (int) ((count/10.0 - count/10)*1000))))
-// ReSharper restore PossibleLossOfFraction
+
                              {RepeatBehavior = RepeatBehavior.Forever};
             BeginAnimation(FrameIndexProperty, _animation);
         }
