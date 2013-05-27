@@ -19,6 +19,8 @@ namespace SearchDuplicates
         private long _fileSize;
         private bool _isDirectoryErrorSuppressionEnabled;
         private bool _isFileErrorSuppressionEnabled;
+        private string _tmpFileName = "";
+        private string _tmpDirName = "";
 
         private Stopwatch _stopwatch;
         public int DupesFound { get; private set; }
@@ -35,6 +37,7 @@ namespace SearchDuplicates
             var d = new DirectoryInfo(path);
             foreach (FileInfo file in d.GetFiles())
             {
+                _tmpFileName = file.FullName;
                 ct.ThrowIfCancellationRequested();
                 using (FileStream fs = File.OpenRead(file.FullName))
                 {
@@ -51,93 +54,95 @@ namespace SearchDuplicates
             }
             ComputeMd5ChecksumFromDir(path, ct);
         }
-
-
         private void ComputeMd5ChecksumFromDir(string path, CancellationToken ct)
         {
             foreach (string dir in Directory.GetDirectories(path))
             {
-                string tmpFileName = "";
-                try
+                foreach (string file in Directory.GetFiles(dir))
                 {
-                    foreach (string file in Directory.GetFiles(dir))
+                    ct.ThrowIfCancellationRequested();
+                    _tmpFileName = file;
+                    _tmpDirName = dir;
+                    using (FileStream fs = File.OpenRead(file))
                     {
-                        ct.ThrowIfCancellationRequested();
-                        tmpFileName = file;
-                        using (FileStream fs = File.OpenRead(file))
+                        string result = Util.GetHash(fs);
+                        if (!_hashDb.Contains(result))
+                            _hashDb.Add(result, file);
+                        else if (!_dupeDb.Contains(file))
                         {
-                            string result = Util.GetHash(fs);
-                            if (!_hashDb.Contains(result))
-                                _hashDb.Add(result, file);
-                            else if (!_dupeDb.Contains(file))
-                            {
-                                _dupeDb.Add(file, result);
-                                var f = new FileInfo(file);
-                                _fileSize += f.Length;
-                            }
-                            fs.Close();
+                            _dupeDb.Add(file, result);
+                            var f = new FileInfo(file);
+                            _fileSize += f.Length;
                         }
-                    }
-                    ComputeMd5ChecksumFromDir(dir, ct);
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    DialogResult dialogResult;
-                    if (!_isDirectoryErrorSuppressionEnabled)
-                    {
-                        dialogResult = MessageBox.Show("У запускающего пользователя не хватает "
-                                                       + "прав для обращения к объекту " + dir +
-                                                       ". Продолжить поиск с повышенными привилегиями?\r\n(При нажатии на 'Да' это окно больше не появится.)",
-                                                       "Нехватка прав",
-                                                       MessageBoxButtons.YesNoCancel);
-                    }
-                    else
-                    {
-                        dialogResult = new DialogResult();
-                    }
-                    if (dialogResult == DialogResult.Yes)
-                    {
-                        _isDirectoryErrorSuppressionEnabled = true;
-                        Util.SetAccessRights(dir);
-                    }
-                    else if (dialogResult == DialogResult.No)
-                    {
-                        Util.SetAccessRights(dir);
-                    }
-                    else if (dialogResult == DialogResult.Cancel)
-                    {
-                        break;
+                        fs.Close();
                     }
                 }
-                catch (IOException)
+                ComputeMd5ChecksumFromDir(dir, ct);
+            }
+        }
+        private void HandleMd5(string path, CancellationToken ct)
+        {
+            try
+            {
+                ComputeMd5Checksum(path, ct);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                DialogResult dialogResult;
+                if (!_isDirectoryErrorSuppressionEnabled)
                 {
-                    ++_unaccessibleFiles;
-                    DialogResult dialogResult;
-                    if (!_isFileErrorSuppressionEnabled)
-                    {
-                        dialogResult =
-                            MessageBox.Show(
-                                "Ошибка доступа к объекту " + tmpFileName +
-                                ". Продолжить поиск?\r\n(При нажатии на 'Да' это окно больше не появится.)",
-                                "Нет доступа",
-                                MessageBoxButtons.YesNoCancel);
-                    }
-                    else
-                    {
-                        dialogResult = new DialogResult();
-                    }
+                    dialogResult = MessageBox.Show("У запускающего пользователя не хватает "
+                                                   + "прав для обращения к объекту " + _tmpDirName +
+                                                   ". Продолжить поиск с повышенными привилегиями?\r\n(При нажатии на 'Да' это окно больше не появится.)",
+                                                   "Нехватка прав",
+                                                   MessageBoxButtons.YesNoCancel);
+                }
+                else
+                {
+                    dialogResult = new DialogResult();
+                }
+                if (dialogResult == DialogResult.Yes)
+                {
+                    _isDirectoryErrorSuppressionEnabled = true;
+                    Util.SetAccessRights(_tmpDirName);
+                }
+                else if (dialogResult == DialogResult.No)
+                {
+                    Util.SetAccessRights(_tmpDirName);
+                }
+                else if (dialogResult == DialogResult.Cancel)
+                {
+                    throw new ApplicationException("Операция прервана пользователем");
+                }
+            }
+            catch (IOException)
+            {
+                ++_unaccessibleFiles;
+                DialogResult dialogResult;
+                if (!_isFileErrorSuppressionEnabled)
+                {
+                    dialogResult =
+                        MessageBox.Show(
+                            "Ошибка доступа к объекту " + _tmpFileName +
+                            ". Продолжить поиск?\r\n(При нажатии на 'Да' это окно больше не появится.)",
+                            "Нет доступа",
+                            MessageBoxButtons.YesNoCancel);
+                }
+                else
+                {
+                    dialogResult = new DialogResult();
+                }
 
-                    if (dialogResult == DialogResult.Yes)
-                    {
-                        _isFileErrorSuppressionEnabled = true;
-                    }
-                    else if (dialogResult == DialogResult.No)
-                    {
-                    }
-                    else if (dialogResult == DialogResult.Cancel)
-                    {
-                        break;
-                    }
+                if (dialogResult == DialogResult.Yes)
+                {
+                    _isFileErrorSuppressionEnabled = true;
+                }
+                else if (dialogResult == DialogResult.No)
+                {
+                }
+                else if (dialogResult == DialogResult.Cancel)
+                {
+                    throw new ApplicationException("Операция прервана пользователем");
                 }
             }
         }
@@ -145,7 +150,15 @@ namespace SearchDuplicates
         public StringBuilder Search(string path, CancellationToken ct)
         {
             _stopwatch = Stopwatch.StartNew();
-            ComputeMd5Checksum(path, ct);
+            //ComputeMd5Checksum(path, ct);
+            try
+            {
+                HandleMd5(path, ct);
+            }
+            catch (ApplicationException)
+            {
+                return null;
+            }
             DupesFound = _dupeDb.Keys.Count;
             StringBuilder builder = PrintResult();
             TimeElapsed = _stopwatch.Elapsed.TotalSeconds;
@@ -158,8 +171,8 @@ namespace SearchDuplicates
         {
             var entry = new DictionaryEntry();
             foreach (DictionaryEntry d in from DictionaryEntry d in table
-                                          where (d.Key.ToString() == (string) searchKey) ||
-                                                (d.Value.ToString() == (string) searchValue)
+                                          where (d.Key.ToString() == (string)searchKey) ||
+                                                (d.Value.ToString() == (string)searchValue)
                                           select d)
             {
                 entry = d;
